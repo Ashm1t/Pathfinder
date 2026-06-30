@@ -1,0 +1,42 @@
+# Build output
+build/
+out/
+bin/
+*.obj
+*.exe
+*.pdb
+*.ilk
+*.exp
+*.lib
+
+# Visual Studio
+.vs/
+*.vcxproj.user
+*.VC.db
+*.VC.opendb
+*.sdf
+*.opensdf
+*.suo
+*.user
+*.userosscache
+*.sln.docview
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+
+# Compiler / linker
+*.d
+*.o
+*.a
+*.so
+*.map
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini

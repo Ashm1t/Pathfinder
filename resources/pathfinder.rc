@@ -1,0 +1,4 @@
+// Pathfinder — resource file
+#include <windows.h>
+
+PATHFINDER_ICON ICON "icon.ico"
