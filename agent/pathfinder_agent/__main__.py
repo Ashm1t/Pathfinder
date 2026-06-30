@@ -1,8 +1,9 @@
-"""CLI entrypoint for the foundation slice.
+"""CLI entrypoint.
 
 Usage:
-    python -m pathfinder_agent scan <folder>     # structural ingest + show panels
-    python -m pathfinder_agent panels            # show panels from existing memory
+    python -m pathfinder_agent scan <folder>   # structural ingest + show panels
+    python -m pathfinder_agent panels          # show panels from existing memory
+    python -m pathfinder_agent run             # start agent loop + IPC server
 """
 from __future__ import annotations
 
@@ -37,6 +38,21 @@ def main(argv=None) -> int:
 
     if cmd == "panels":
         print(json.dumps(all_panels(mem), indent=2, ensure_ascii=False))
+        return 0
+
+    if cmd == "run":
+        mem.close()  # AgentLoop opens its own connection
+        from .agent_loop import AgentLoop
+        from .ipc import serve
+        loop = AgentLoop(cfg)
+        loop.start()
+        print(f"[agent] serving on http://{cfg.ipc.host}:{cfg.ipc.port}")
+        try:
+            serve(loop, cfg.ipc.host, cfg.ipc.port)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            loop.stop()
         return 0
 
     print(f"Unknown command: {cmd}")

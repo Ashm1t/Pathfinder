@@ -15,6 +15,19 @@ def now_ms() -> int:
     return int(time.time() * 1000)
 
 
+def iso_date_to_ms(iso: str) -> int:
+    """Parse 'YYYY-MM-DD' to Unix epoch ms (UTC midnight). 0 if invalid."""
+    if not iso:
+        return 0
+    from datetime import datetime, timezone
+    try:
+        dt = datetime.strptime(iso.strip()[:10], "%Y-%m-%d").replace(
+            tzinfo=timezone.utc)
+    except ValueError:
+        return 0
+    return int(dt.timestamp() * 1000)
+
+
 class FactType(str, Enum):
     CASE_TITLE = "CaseTitle"
     FIR_NUMBER = "FirNumber"
