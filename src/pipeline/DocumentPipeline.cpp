@@ -1,0 +1,102 @@
+#include "pipeline/DocumentPipeline.h"
+#include "pipeline/CaseExtractor.h"
+#include <algorithm>
+#include <filesystem>
+
+namespace Pathfinder {
+
+namespace fs = std::filesystem;
+
+DocumentPipeline::DocumentPipeline(FilesystemMcp& fsmcp,
+                                   ILlmAdapter&   llm,
+                                   AgentMemory&   memory,
+                                   const AgentConfig& cfg)
+    : m_fs(fsmcp), m_llm(llm), m_memory(memory), m_cfg(cfg) {}
+
+std::string DocumentPipeline::infer_case_id(const std::string& path) const {
+    // Convention: immediate parent folder = case_id
+    // e.g. C:\CaseDiary\FIR_2026_001\diary.docx  →  "FIR_2026_001"
+    fs::path p(path);
+    return p.parent_path().filename().string();
+}
+
+ParsedDocument DocumentPipeline::extract_text(const std::string& path) {
+    ParsedDocument doc;
+    doc.path    = path;
+    doc.case_id = infer_case_id(path);
+
+    // Read raw content via filesystem MCP
+    // For .docx/.pdf, the MCP server returns extracted text if supported,
+    // otherwise raw bytes — we take what we get and pass to LLM.
+    std::string content = m_fs.read_file(path);
+    if (content.empty()) {
+        doc.error   = "Empty or unreadable file";
+        doc.success = false;
+        return doc;
+    }
+
+    // Size guard
+    size_t max_bytes = (size_t)m_cfg.max_file_size_mb * 1024 * 1024;
+    if (content.size() > max_bytes) {
+        content = content.substr(0, max_bytes);
+    }
+
+    doc.text    = std::move(content);
+    doc.success = true;
+    return doc;
+}
+
+bool DocumentPipeline::process_file(const std::string& path, int64_t mtime_ms) {
+    // Check extension
+    fs::path p(path);
+    std::string ext = p.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+
+    bool supported = false;
+    for (auto& e : m_cfg.supported_extensions)
+        if (e == ext) { supported = true; break; }
+    if (!supported) return false;
+
+    // Skip unchanged files
+    if (!m_memory.needs_processing(path, mtime_ms)) return false;
+
+    ParsedDocument doc = extract_text(path);
+    if (!doc.success) return false;
+
+    // Ensure case record exists
+    auto existing = m_memory.get_case(doc.case_id);
+    if (!existing) {
+        CaseRecord rec;
+        rec.case_id = doc.case_id;
+        rec.title   = doc.case_id;  // will be overwritten by extraction
+        rec.status  = "active";
+        m_memory.upsert_case(rec);
+    }
+
+    // Run LLM extraction
+    CaseExtractor extractor(m_llm);
+    auto facts = extractor.extract(doc.case_id, path, doc.text);
+
+    // Persist facts
+    for (auto& f : facts) {
+        m_memory.upsert_fact(f);
+
+        // Update case title from extracted fact
+        if (f.type == FactType::CaseTitle && existing) {
+            CaseRecord rec = *existing;
+            rec.title = f.value;
+            m_memory.upsert_case(rec);
+        }
+    }
+
+    m_memory.mark_processed(path, mtime_ms, doc.case_id);
+    return true;
+}
+
+void DocumentPipeline::process_folder(const std::string& folder_path) {
+    auto files = m_fs.find_files(folder_path, m_cfg.supported_extensions);
+    for (auto& entry : files)
+        process_file(entry.path, entry.modified_ms);
+}
+
+}  // namespace Pathfinder

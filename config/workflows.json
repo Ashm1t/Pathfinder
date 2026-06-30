@@ -1,0 +1,162 @@
+[
+  {
+    "id": "isp_letter",
+    "name": "ISP Data Request Letter",
+    "description": "UC2: Generates a Section 91/94 BNSS notice to ISP from case data",
+    "enabled": true,
+    "trigger": {
+      "type": "manual",
+      "config": {}
+    },
+    "steps": [
+      {
+        "type": "read_document",
+        "name": "Read FIR",
+        "config": {}
+      },
+      {
+        "type": "extract_facts",
+        "name": "Extract accused phone numbers",
+        "config": {}
+      },
+      {
+        "type": "llm_transform",
+        "name": "Draft ISP letter",
+        "config": {
+          "output_key": "isp_letter_text",
+          "temperature": 0.2,
+          "max_tokens": 1024,
+          "system_prompt": "You are a legal drafting assistant for Indian police. Draft a formal Section 91 BNSS notice to an ISP requesting CDR/IPDR records. Use formal Hindi/English mixed legal language as appropriate. Include all mandatory fields.",
+          "user_template": "Draft an ISP CDR request letter for case {{case_id}}. Accused numbers extracted from FIR. Generate the complete letter body."
+        }
+      },
+      {
+        "type": "generate_doc",
+        "name": "Apply letter template",
+        "config": {
+          "output_key": "final_letter",
+          "template": "SECTION 91 BNSS NOTICE\n\nFrom: Investigating Officer\nCase: {{case_id}} | FIR No: {{FirNumber}}\nPolice Station: {{PoliceStation}}\n\n{{isp_letter_text}}\n\nDate: ___________\nSignature: ___________"
+        }
+      },
+      {
+        "type": "notify",
+        "name": "Notify completion",
+        "config": {
+          "message": "ISP letter draft ready for review",
+          "severity": "info"
+        }
+      }
+    ]
+  },
+  {
+    "id": "chargesheet_check",
+    "name": "Chargesheet Deadline Alert",
+    "description": "UC3: Alerts when chargesheet deadline approaches and checks document completeness",
+    "enabled": true,
+    "trigger": {
+      "type": "deadline",
+      "config": { "days_before": 7 }
+    },
+    "steps": [
+      {
+        "type": "llm_transform",
+        "name": "Check completeness",
+        "config": {
+          "output_key": "completeness_report",
+          "temperature": 0.1,
+          "max_tokens": 512,
+          "system_prompt": "You are a police case review assistant. Check if all required components for a chargesheet are present and list what is missing.",
+          "user_template": "Case {{case_id}} chargesheet deadline is {{deadline_value}}. Review completeness and list missing documents."
+        }
+      },
+      {
+        "type": "notify",
+        "name": "Alert IO",
+        "config": {
+          "message": "Chargesheet deadline approaching — review completeness report",
+          "severity": "urgent"
+        }
+      }
+    ]
+  },
+  {
+    "id": "notice_draft",
+    "name": "Witness Notice Generator",
+    "description": "UC4: Drafts Section 179 BNSS notices to witnesses extracted from FIR",
+    "enabled": true,
+    "trigger": {
+      "type": "manual",
+      "config": {}
+    },
+    "steps": [
+      {
+        "type": "read_document",
+        "name": "Read case diary",
+        "config": {}
+      },
+      {
+        "type": "extract_facts",
+        "name": "Extract witnesses",
+        "config": {}
+      },
+      {
+        "type": "llm_transform",
+        "name": "Draft notice",
+        "config": {
+          "output_key": "notice_text",
+          "temperature": 0.15,
+          "max_tokens": 512,
+          "system_prompt": "Draft a formal Section 179 BNSS notice to a witness for Indian police. Use legal language.",
+          "user_template": "Draft a witness notice for case {{case_id}}. Witnesses identified in FIR. Generate the notice body."
+        }
+      },
+      {
+        "type": "notify",
+        "name": "Notify ready",
+        "config": {
+          "message": "Witness notice draft ready",
+          "severity": "info"
+        }
+      }
+    ]
+  },
+  {
+    "id": "court_compliance",
+    "name": "Court Compliance Report",
+    "description": "UC5: Auto-generates a court compliance report from case chronology",
+    "enabled": true,
+    "trigger": {
+      "type": "deadline",
+      "config": { "days_before": 3, "type": "CourtDate" }
+    },
+    "steps": [
+      {
+        "type": "llm_transform",
+        "name": "Draft compliance report",
+        "config": {
+          "output_key": "compliance_report",
+          "temperature": 0.15,
+          "max_tokens": 768,
+          "system_prompt": "You are drafting a court compliance report for an Indian police IO. Summarize steps taken in the investigation. Be factual, concise, and formal.",
+          "user_template": "Generate a court compliance report for case {{case_id}}. Court date: {{deadline_value}}. Summarize investigation progress."
+        }
+      },
+      {
+        "type": "generate_doc",
+        "name": "Apply report template",
+        "config": {
+          "output_key": "final_report",
+          "template": "COMPLIANCE REPORT\n\nIn the Court of ___________\nCase: {{case_id}} | FIR No: {{FirNumber}}\n\n{{compliance_report}}\n\nDate: ___________\nIO Signature: ___________"
+        }
+      },
+      {
+        "type": "notify",
+        "name": "Notify ready",
+        "config": {
+          "message": "Court compliance report ready for review",
+          "severity": "warning"
+        }
+      }
+    ]
+  }
+]
