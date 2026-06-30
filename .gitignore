@@ -41,3 +41,13 @@ Makefile
 Thumbs.db
 .DS_Store
 desktop.ini
+
+# Python agent
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+agent/_sample/
+*.db
+*.db-wal
+*.db-shm
