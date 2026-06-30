@@ -2,10 +2,30 @@
 #include "pipeline/CaseExtractor.h"
 #include <algorithm>
 #include <filesystem>
+#include <iostream>
 
 namespace Pathfinder {
 
 namespace fs = std::filesystem;
+
+// Heuristic: does this content look like plain UTF-8 text (not a binary
+// container like a .docx ZIP or a .pdf)? Feeding binary to the LLM produces
+// hallucinated facts, so we skip until a real text-extraction MCP (Office)
+// is wired in.
+static bool looks_like_text(const std::string& content) {
+    if (content.size() >= 2 && content[0] == 'P' && content[1] == 'K')
+        return false;                              // ZIP (docx/xlsx/pptx)
+    if (content.rfind("%PDF", 0) == 0)
+        return false;                              // PDF
+    size_t sample = std::min<size_t>(content.size(), 4096);
+    size_t nontext = 0;
+    for (size_t i = 0; i < sample; ++i) {
+        unsigned char c = static_cast<unsigned char>(content[i]);
+        if (c == 0) return false;                  // NUL → definitely binary
+        if (c < 9 || (c > 13 && c < 32)) ++nontext;
+    }
+    return sample == 0 || (double)nontext / sample < 0.10;
+}
 
 DocumentPipeline::DocumentPipeline(FilesystemMcp& fsmcp,
                                    ILlmAdapter&   llm,
@@ -39,6 +59,16 @@ ParsedDocument DocumentPipeline::extract_text(const std::string& path) {
     size_t max_bytes = (size_t)m_cfg.max_file_size_mb * 1024 * 1024;
     if (content.size() > max_bytes) {
         content = content.substr(0, max_bytes);
+    }
+
+    // Reject binary containers — we have no text extractor for them yet.
+    if (!looks_like_text(content)) {
+        doc.error   = "Binary document (needs Office/text-extraction MCP): " + path;
+        doc.success = false;
+        std::cerr << "[DocumentPipeline] Skipping " << path
+                  << " — not plain text. Wire the Office MCP to ingest "
+                     ".docx/.pdf.\n";
+        return doc;
     }
 
     doc.text    = std::move(content);

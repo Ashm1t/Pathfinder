@@ -5,6 +5,7 @@
 #include <mutex>
 #include <functional>
 #include <chrono>
+#include <unordered_map>
 
 namespace Pathfinder {
 

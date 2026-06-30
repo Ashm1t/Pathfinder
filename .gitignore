@@ -2,6 +2,7 @@
 build/
 out/
 bin/
+_verify/
 *.obj
 *.exe
 *.pdb

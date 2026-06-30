@@ -3,6 +3,9 @@
 #include <functional>
 #include <string>
 #include <vector>
+#include <thread>
+#include <atomic>
+#include <unordered_map>
 
 namespace Pathfinder {
 
@@ -18,6 +21,7 @@ struct FileChangeEvent {
     enum class Type { Created, Modified, Deleted };
     Type        type;
     std::string path;
+    int64_t     mtime_ms = 0;   // last-write time of the file (0 for Deleted)
 };
 
 using FileChangeCallback = std::function<void(const FileChangeEvent&)>;

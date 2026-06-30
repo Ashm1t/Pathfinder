@@ -11,6 +11,9 @@
 #include <atomic>
 #include <thread>
 #include <memory>
+#include <deque>
+#include <mutex>
+#include <condition_variable>
 
 namespace Pathfinder {
 
@@ -43,6 +46,17 @@ private:
     // Build What's Next from deadlines + case facts.
     std::vector<WhatsNextItem> compute_whats_next();
 
+    // ── Ingestion work queue ──────────────────────────────────────────────
+    // The file watcher only *enqueues* jobs; the worker thread does the heavy
+    // LLM extraction and workflow dispatch, so change detection never blocks.
+    struct IngestJob {
+        std::string             path;
+        int64_t                 mtime_ms = 0;
+        FileChangeEvent::Type   type;
+    };
+    void enqueue_job(IngestJob job);
+    void worker_thread();
+
     Config                         m_cfg;
     std::unique_ptr<ILlmAdapter>   m_llm;
 
@@ -57,7 +71,13 @@ private:
 
     PanelDataStore    m_store;
     std::atomic<bool> m_running{false};
-    std::thread       m_thread;
+    std::thread       m_thread;     // periodic tick (deadlines, panel refresh)
+
+    // Ingestion worker
+    std::thread                 m_worker;
+    std::deque<IngestJob>       m_jobs;
+    std::mutex                  m_jobs_mx;
+    std::condition_variable     m_jobs_cv;
 };
 
 }  // namespace Pathfinder

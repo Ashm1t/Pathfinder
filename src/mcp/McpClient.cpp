@@ -25,9 +25,20 @@ McpClient::~McpClient() {
 }
 
 bool McpClient::connect() {
-    // Build command line: "command arg1 arg2 ..."
-    std::string cmdline = m_command;
-    for (auto& a : m_args) cmdline += " " + a;
+    // Build command line. CreateProcessW does NOT resolve PATHEXT, so batch
+    // launchers like npx/npm (npx.cmd) must be run through the command
+    // interpreter. We wrap the whole invocation in `cmd.exe /s /c "..."`.
+    auto quote_if_needed = [](const std::string& a) -> std::string {
+        if (a.find(' ') == std::string::npos && a.find('\t') == std::string::npos)
+            return a;
+        return "\"" + a + "\"";
+    };
+
+    std::string inner = quote_if_needed(m_command);
+    for (auto& a : m_args) inner += " " + quote_if_needed(a);
+
+    // /s /c with a single outer-quoted string is the documented-safe form.
+    std::string cmdline = "cmd.exe /s /c \"" + inner + "\"";
 
     // Create anonymous pipes for stdin/stdout
     HANDLE hChildStdinR, hChildStdinW;

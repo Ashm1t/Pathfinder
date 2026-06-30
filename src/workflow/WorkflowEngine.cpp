@@ -64,14 +64,22 @@ void WorkflowEngine::load_from_file(const std::string& path) {
 
 WorkflowResult WorkflowEngine::run(const std::string& workflow_id,
                                     WorkflowContext ctx) {
-    std::lock_guard<std::mutex> lk(m_mx);
-    for (auto& wf : m_workflows) {
-        if (wf.id == workflow_id && wf.enabled) {
-            ctx.workflow_id = workflow_id;
-            return execute_steps(wf, ctx);
+    // Copy the workflow out under lock, then release before executing —
+    // step execution can block on the LLM for tens of seconds and must not
+    // hold the registry mutex.
+    Workflow wf;
+    bool found = false;
+    {
+        std::lock_guard<std::mutex> lk(m_mx);
+        for (auto& w : m_workflows) {
+            if (w.id == workflow_id && w.enabled) { wf = w; found = true; break; }
         }
     }
-    return {false, "Workflow not found: " + workflow_id, ctx};
+    if (!found)
+        return {false, "Workflow not found: " + workflow_id, ctx};
+
+    ctx.workflow_id = workflow_id;
+    return execute_steps(wf, ctx);
 }
 
 WorkflowResult WorkflowEngine::execute_steps(Workflow& wf, WorkflowContext& ctx) {
@@ -153,8 +161,8 @@ bool WorkflowEngine::step_llm_transform(const WorkflowStep& s,
     req.temperature = s.config.value("temperature", 0.2f);
     req.max_tokens  = s.config.value("max_tokens",  1024);
     req.messages    = {
-        {{"role", "system"}, {"content", system_prompt}},
-        {{"role", "user"},   {"content", user_template}}
+        {"system", system_prompt},
+        {"user",   user_template}
     };
 
     auto resp = m_llm.complete(req);
@@ -219,26 +227,30 @@ bool WorkflowEngine::step_notify(const WorkflowStep& s, WorkflowContext& ctx) {
 
 void WorkflowEngine::dispatch_file_event(const std::string& path,
                                           FileChangeEvent::Type event_type) {
-    std::lock_guard<std::mutex> lk(m_mx);
-    for (auto& wf : m_workflows) {
-        if (!wf.enabled) continue;
-        bool match = false;
-        if (event_type == FileChangeEvent::Type::Created &&
-            wf.trigger.type == TriggerType::FileCreated)  match = true;
-        if (event_type == FileChangeEvent::Type::Modified &&
-            wf.trigger.type == TriggerType::FileModified) match = true;
+    // Collect matching workflows under lock, then run them after releasing it.
+    std::vector<Workflow> matched;
+    {
+        std::lock_guard<std::mutex> lk(m_mx);
+        for (auto& wf : m_workflows) {
+            if (!wf.enabled) continue;
+            bool match =
+                (event_type == FileChangeEvent::Type::Created &&
+                 wf.trigger.type == TriggerType::FileCreated) ||
+                (event_type == FileChangeEvent::Type::Modified &&
+                 wf.trigger.type == TriggerType::FileModified);
+            if (!match) continue;
 
-        if (match) {
-            // Check glob filter if provided
             std::string glob = wf.trigger.config.value("glob", "");
-            if (!glob.empty()) {
-                // Simple suffix check for now
-                if (path.find(glob) == std::string::npos) continue;
-            }
-            WorkflowContext ctx;
-            ctx.trigger_path = path;
-            execute_steps(wf, ctx);
+            if (!glob.empty() && path.find(glob) == std::string::npos) continue;
+
+            matched.push_back(wf);
         }
+    }
+
+    for (auto& wf : matched) {
+        WorkflowContext ctx;
+        ctx.trigger_path = path;
+        execute_steps(wf, ctx);
     }
 }
 
@@ -246,9 +258,15 @@ void WorkflowEngine::dispatch_deadline_check() {
     auto deadlines = m_memory.get_upcoming_deadlines(14);
     if (deadlines.empty()) return;
 
-    std::lock_guard<std::mutex> lk(m_mx);
-    for (auto& wf : m_workflows) {
-        if (!wf.enabled || wf.trigger.type != TriggerType::Deadline) continue;
+    std::vector<Workflow> matched;
+    {
+        std::lock_guard<std::mutex> lk(m_mx);
+        for (auto& wf : m_workflows)
+            if (wf.enabled && wf.trigger.type == TriggerType::Deadline)
+                matched.push_back(wf);
+    }
+
+    for (auto& wf : matched) {
         for (auto& d : deadlines) {
             WorkflowContext ctx;
             ctx.case_id = d.case_id;

@@ -17,10 +17,12 @@ public:
 private:
     LlmConfig   m_cfg;
 
-    // WinHTTP helpers
-    std::string post_json(const std::string& path,
-                          const std::string& body,
-                          int timeout_ms);
+    // WinHTTP request. Throws std::runtime_error on transport failure or any
+    // HTTP status >= 400 (message includes the status code and response body).
+    std::string http_request(const std::wstring& verb,
+                             const std::string& path,
+                             const std::string& body,
+                             int timeout_ms);
 };
 
 // Factory — returns the configured adapter; swap here when adding vLLM etc.

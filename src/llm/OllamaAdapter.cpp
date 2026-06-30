@@ -23,9 +23,10 @@ struct WinHttpHandle {
 
 OllamaAdapter::OllamaAdapter(const LlmConfig& cfg) : m_cfg(cfg) {}
 
-std::string OllamaAdapter::post_json(const std::string& path,
-                                     const std::string& body,
-                                     int timeout_ms) {
+std::string OllamaAdapter::http_request(const std::wstring& verb,
+                                        const std::string& path,
+                                        const std::string& body,
+                                        int timeout_ms) {
     // Parse base_url into host + port
     std::string url = m_cfg.base_url;
     std::string host;
@@ -76,7 +77,7 @@ std::string OllamaAdapter::post_json(const std::string& path,
         throw std::runtime_error("WinHttpConnect failed");
 
     DWORD flags = secure ? WINHTTP_FLAG_SECURE : 0;
-    request.h = WinHttpOpenRequest(connect.h, L"POST",
+    request.h = WinHttpOpenRequest(connect.h, verb.c_str(),
                                    to_wide(path).c_str(),
                                    nullptr, WINHTTP_NO_REFERER,
                                    WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
@@ -97,6 +98,13 @@ std::string OllamaAdapter::post_json(const std::string& path,
     if (!WinHttpReceiveResponse(request.h, nullptr))
         throw std::runtime_error("WinHttpReceiveResponse failed");
 
+    // Check HTTP status code.
+    DWORD status = 0, status_size = sizeof(status);
+    WinHttpQueryHeaders(request.h,
+                        WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                        WINHTTP_HEADER_NAME_BY_INDEX, &status, &status_size,
+                        WINHTTP_NO_HEADER_INDEX);
+
     std::string result;
     DWORD bytes_available = 0;
     do {
@@ -109,6 +117,12 @@ std::string OllamaAdapter::post_json(const std::string& path,
         WinHttpReadData(request.h, chunk.data(), bytes_available, &bytes_read);
         result.append(chunk, 0, bytes_read);
     } while (bytes_available > 0);
+
+    if (status >= 400) {
+        std::string snippet = result.substr(0, 300);
+        throw std::runtime_error("HTTP " + std::to_string(status) +
+                                 " from " + path + ": " + snippet);
+    }
 
     return result;
 }
@@ -132,7 +146,8 @@ LlmResponse OllamaAdapter::complete(const LlmRequest& req) {
     };
 
     try {
-        std::string raw = post_json("/api/chat", body.dump(), m_cfg.timeout_ms);
+        std::string raw = http_request(L"POST", "/api/chat",
+                                       body.dump(), m_cfg.timeout_ms);
         json r = json::parse(raw);
 
         resp.content          = r["message"]["content"].get<std::string>();
@@ -157,7 +172,8 @@ LlmResponse OllamaAdapter::complete_stream(const LlmRequest& req,
 
 bool OllamaAdapter::is_available() {
     try {
-        post_json("/api/tags", "", 3000);
+        // /api/tags is a GET endpoint — lists installed models.
+        http_request(L"GET", "/api/tags", "", 3000);
         return true;
     } catch (...) {
         return false;

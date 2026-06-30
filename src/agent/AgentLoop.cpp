@@ -1,4 +1,5 @@
 #include "agent/AgentLoop.h"
+#include "llm/OllamaAdapter.h"   // make_llm_adapter factory
 #include <chrono>
 #include <iostream>
 
@@ -48,40 +49,65 @@ bool AgentLoop::start() {
     // Load workflow definitions if present
     m_workflow_engine->load_from_file("config/workflows.json");
 
-    // ── File watcher ─────────────────────────────────────────────────────────
+    // ── Start workers BEFORE watching, so early events are handled ────────────
+    m_running = true;
+    m_worker  = std::thread(&AgentLoop::worker_thread, this);
+
+    // ── File watcher — only enqueues; the worker does the heavy lifting ───────
     m_fs->start_watching(
         m_cfg.agent.watched_folders,
         m_cfg.agent.poll_interval_ms,
         [this](const FileChangeEvent& ev) {
             if (ev.type == FileChangeEvent::Type::Deleted) return;
-
-            // Process the changed file through the pipeline
-            m_pipeline->process_file(ev.path, 0);
-
-            // Dispatch to any matching workflows
-            m_workflow_engine->dispatch_file_event(ev.path, ev.type);
-
-            // Refresh panel data
-            refresh_panels();
+            enqueue_job({ev.path, ev.mtime_ms, ev.type});
         }
     );
 
-    // ── Initial scan ──────────────────────────────────────────────────────────
+    // ── Initial scan — enqueue every existing file ────────────────────────────
     for (auto& folder : m_cfg.agent.watched_folders)
-        m_pipeline->process_folder(folder);
-    refresh_panels();
+        for (auto& f : m_fs->find_files(folder, m_cfg.agent.supported_extensions))
+            enqueue_job({f.path, f.modified_ms, FileChangeEvent::Type::Created});
 
     // ── Background tick thread ────────────────────────────────────────────────
-    m_running = true;
-    m_thread  = std::thread(&AgentLoop::agent_thread, this);
+    m_thread = std::thread(&AgentLoop::agent_thread, this);
     return true;
 }
 
 void AgentLoop::stop() {
     if (!m_running.exchange(false)) return;
-    if (m_thread.joinable()) m_thread.join();
+    m_jobs_cv.notify_all();              // wake the worker so it can exit
     if (m_fs) m_fs->stop_watching();
+    if (m_worker.joinable()) m_worker.join();
+    if (m_thread.joinable()) m_thread.join();
     if (m_fs_mcp) m_fs_mcp->disconnect();
+}
+
+void AgentLoop::enqueue_job(IngestJob job) {
+    {
+        std::lock_guard<std::mutex> lk(m_jobs_mx);
+        m_jobs.push_back(std::move(job));
+    }
+    m_jobs_cv.notify_one();
+}
+
+void AgentLoop::worker_thread() {
+    while (m_running) {
+        IngestJob job;
+        {
+            std::unique_lock<std::mutex> lk(m_jobs_mx);
+            m_jobs_cv.wait(lk, [this] { return !m_jobs.empty() || !m_running; });
+            if (!m_running && m_jobs.empty()) break;
+            job = std::move(m_jobs.front());
+            m_jobs.pop_front();
+        }
+
+        // Heavy work: text extraction + LLM + workflow dispatch.
+        bool processed = m_pipeline->process_file(job.path, job.mtime_ms);
+        m_workflow_engine->dispatch_file_event(job.path, job.type);
+
+        if (processed)
+            refresh_panels();
+    }
 }
 
 void AgentLoop::agent_thread() {
