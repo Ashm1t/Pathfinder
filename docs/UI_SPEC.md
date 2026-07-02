@@ -1,7 +1,38 @@
 # Pathfinder — UI Architecture Specification
-> Design-agnostic. No colors, no fonts, no visual style decisions.  
-> Derived from Rainmeter source (`third_party/rainmeter`) + Pathfinder HUD requirements.  
-> License note: Rainmeter is GPL-2.0. Borrowed patterns are architectural, not copy-paste.
+> Design-agnostic. No colors, no fonts, no visual style decisions.
+
+## 0. Stack Decision (supersedes the Win32/Direct2D plan below)
+
+**The HUD is built with Tauri**, not raw Win32 + Direct2D: a thin Rust shell
+window (transparent, click-through, always-on-top, DPI-aware — all first-class
+Tauri window APIs) hosting the actual panels/widgets as HTML/CSS/JS rendered
+by WebView2 (already present on Windows 10/11 — no bundled Chromium).
+
+Why: panels, fades, slides, and blur become CSS (`backdrop-filter`,
+`transition`) instead of hand-rolled Direct2D draw calls — much faster to
+iterate on visually. It also removes any GPL exposure (see below) and keeps
+the artifact small.
+
+The **sections below (1–10) describe the conceptual model** — window
+invariants, the four panels, widget taxonomy, input bindings, animation,
+DPI/multi-monitor handling, and the data-flow contract with the agent. That
+model still holds; only the *implementation substrate* changes:
+
+| Concept below | Win32/D2D (original) | Tauri (current) |
+|---|---|---|
+| Overlay window, Z-order, click-through | Win32 window styles | Tauri `WebviewWindowBuilder` (`.transparent()`, `.always_on_top()`, `.skip_taskbar()`, `.decorations(false)`) + per-element `-webkit-app-region`/JS↔Rust cursor-passthrough calls |
+| Draw loop / dirty panels | `BeginDraw`/`EndDraw` | Browser paint pipeline; React/vanilla-JS re-renders only changed panel state |
+| Widgets (Text/Bar/Shape/Image/Line/Button) | Custom `Widget` subclasses | HTML elements + CSS (a `<div>` + CSS is the ShapeWidget; a `<canvas>`/SVG is the LineWidget) |
+| Fade / slide animation | `WM_TIMER` + manual alpha lerp | CSS `transition`/`animation` |
+| Blur behind panel | `BLURMODE_REGION` | CSS `backdrop-filter: blur()` |
+| DPI scaling | `WM_DPICHANGED`, manual rescale | Handled by WebView2; use CSS logical px + `devicePixelRatio` only if needed |
+| Data push from agent | `PanelDataStore` → `WM_APP_DATA_UPDATE` → `Widget.Update()` | Rust shell polls/subscribes to the Python `ipc.py` endpoints (`/panels`, `/notifications`) and emits a Tauri event to the JS frontend, which re-renders |
+
+**License note:** the sections below were originally derived by reading
+Rainmeter source (`third_party/rainmeter`, GPL-2.0) for architectural patterns.
+None of that code is used — Tauri/WebView2/CSS replace it entirely. The
+Rainmeter submodule is kept only as a design reference and is not compiled
+into, linked with, or copied into Pathfinder.
 
 ---
 
@@ -291,18 +322,21 @@ This keeps the rendering thread free of blocking I/O.
 
 ---
 
-## 10. File Map (Rainmeter source → Pathfinder use)
+## 10. File Map (Rainmeter source → Pathfinder use) — SUPERSEDED
 
-| Rainmeter file | What Pathfinder takes |
+This table is kept for history only. It described the original Win32/Direct2D
+plan and listed several files as "Direct copy" — that would have pulled
+GPL-2.0-licensed code into the Pathfinder binary. **Under the Tauri stack
+(section 0), none of this applies: no Rainmeter code is copied, referenced,
+compiled, or linked.** The `third_party/rainmeter` submodule may be removed
+once the Tauri shell is in place; it serves no build purpose.
+
+| Rainmeter concept | Pathfinder equivalent (Tauri) |
 |---------------|----------------------|
-| `Common/Gfx/Canvas.h/.cpp` | **Direct copy** — rendering pipeline, wrap as-is |
-| `Common/Gfx/Shape.*` | **Direct copy** — geometry primitives for ShapeWidget |
-| `Common/Gfx/TextFormat*` | **Direct copy** — DirectWrite text formatting |
-| `Library/Skin.h` | **Pattern only** — window creation flags, fade logic, DPI handling |
-| `Library/Meter.h` | **Pattern only** — Widget base class design |
-| `Library/MeterString.h` | **Pattern only** — TextWidget |
-| `Library/MeterBar.h` | **Pattern only** — BarWidget |
-| `Library/MeterShape.h` | **Pattern only** — ShapeWidget |
-| `Library/Mouse.h` | **Direct copy** — MOUSEACTION enum + Mouse class |
-| `Library/SkinPosition.h` | **Pattern only** — panel anchor logic |
-| Everything else | Not used |
+| `Common/Gfx/Canvas.h/.cpp` (rendering pipeline) | Browser paint pipeline (WebView2) |
+| `Common/Gfx/Shape.*` (geometry primitives) | CSS / SVG / `<canvas>` |
+| `Common/Gfx/TextFormat*` (text formatting) | CSS text properties |
+| `Library/Skin.h` (window flags, fade, DPI) | Tauri `WebviewWindowBuilder` + CSS transitions |
+| `Library/Meter.h` / `MeterString.h` / `MeterBar.h` / `MeterShape.h` | HTML elements + CSS (see section 0 table) |
+| `Library/Mouse.h` (MOUSEACTION enum) | Native DOM mouse events |
+| `Library/SkinPosition.h` (panel anchor logic) | CSS positioning / flex/grid layout |

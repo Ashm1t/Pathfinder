@@ -51,3 +51,7 @@ agent/_sample/
 *.db
 *.db-wal
 *.db-shm
+
+# Rust / Tauri
+hud/src-tauri/target/
+hud/src-tauri/gen/

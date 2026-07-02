@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "identifier": "default",
+  "description": "Default capabilities for the Pathfinder HUD window",
+  "windows": ["hud"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:window:allow-set-ignore-cursor-events"
+  ]
+}

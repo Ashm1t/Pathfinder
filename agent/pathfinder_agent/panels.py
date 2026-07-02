@@ -39,6 +39,8 @@ def major_updates(mem: AgentMemory, within_days: int = 14) -> List[Dict]:
         out.append({
             "severity": sev, "case_id": d.case_id, "title": title,
             "body": body, "timestamp_ms": d.event_date_ms,
+            "detected_ms": d.extracted_at,
+            "source_file": d.source_file, "source_page": d.source_page,
         })
     return out
 
@@ -61,7 +63,8 @@ def whats_next(mem: AgentMemory) -> List[Dict]:
         items.append({"rank": rank, "case_id": d.case_id,
                       "action": f"File chargesheet for {d.case_id}",
                       "reason": f"Deadline: {d.value} (within 7 days)",
-                      "due_ms": d.event_date_ms})
+                      "due_ms": d.event_date_ms,
+                      "source_file": d.source_file, "source_page": d.source_page})
         rank += 1
 
     for d in deadlines:
@@ -69,7 +72,8 @@ def whats_next(mem: AgentMemory) -> List[Dict]:
             continue
         items.append({"rank": rank, "case_id": d.case_id,
                       "action": f"Prepare documents for court — {d.case_id}",
-                      "reason": f"Hearing: {d.value}", "due_ms": d.event_date_ms})
+                      "reason": f"Hearing: {d.value}", "due_ms": d.event_date_ms,
+                      "source_file": d.source_file, "source_page": d.source_page})
         rank += 1
 
     stale = now_ms() - 7 * 86400 * 1000
@@ -77,7 +81,8 @@ def whats_next(mem: AgentMemory) -> List[Dict]:
         if c.updated_at < stale:
             items.append({"rank": rank, "case_id": c.case_id,
                           "action": f"Update case diary — {c.case_id}",
-                          "reason": "No diary entry in last 7 days", "due_ms": 0})
+                          "reason": "No diary entry in last 7 days", "due_ms": 0,
+                          "source_file": "", "source_page": 0})
             rank += 1
         if len(items) >= 10:
             break
