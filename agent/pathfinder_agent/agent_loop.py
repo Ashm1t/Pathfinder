@@ -39,18 +39,39 @@ class AgentLoop:
         self._llm = make_llm_adapter(cfg.llm)
         self._extractor = CaseExtractor(self._llm)
         self._pipeline = DocumentPipeline(self._mem, self._extractor, cfg.agent)
-        self._notifications: List[Dict] = []
-        self._notif_lock = threading.Lock()
-        self._wf = WorkflowEngine(self._llm, self._mem, self._on_notify)
+        self._wf = WorkflowEngine(self._llm, self._mem, self._on_notify,
+                                  case_files_resolver=self._case_files)
 
         self._jobs: "queue.Queue[tuple]" = queue.Queue()
         self._running = False
         self._threads: List[threading.Thread] = []
         self._llm_ok = False
 
+    GENERATED_WORKFLOWS_PATH = "config/workflows.generated.json"
+
+    def _case_files(self, case_id: str) -> List[str]:
+        """Resolve a case's document files by the folder convention: a watched
+        folder contains a directory named exactly case_id; its loose files
+        (not accused subfolders) are the case documents."""
+        for folder in self._cfg.agent.watched_folders:
+            case_dir = os.path.join(folder, case_id)
+            if not os.path.isdir(case_dir):
+                continue
+            out = []
+            for name in sorted(os.listdir(case_dir)):
+                p = os.path.join(case_dir, name)
+                ext = os.path.splitext(name)[1].lower()
+                if os.path.isfile(p) and ext in self._cfg.agent.supported_extensions:
+                    out.append(p)
+            return out
+        return []
+
+    def load_workflows(self, workflows_path: str = "config/workflows.json") -> None:
+        self._wf.load_paths([workflows_path, self.GENERATED_WORKFLOWS_PATH])
+
     # ── lifecycle ─────────────────────────────────────────────────────────────
     def start(self, workflows_path: str = "config/workflows.json") -> None:
-        self._wf.load_from_file(workflows_path)
+        self.load_workflows(workflows_path)
         self._llm_ok = self._llm.is_available()
         if not self._llm_ok:
             print(f"[agent] WARNING: LLM unavailable at {self._cfg.llm.base_url} "
@@ -108,14 +129,21 @@ class AgentLoop:
             snapshot = current
 
     def _worker_loop(self) -> None:
+        llm_checked_at = 0.0
         while self._running:
             job = self._jobs.get()
             if job is None:
                 break
             path, mtime, event = job
             try:
-                if self._llm_ok:
-                    self._pipeline.process_file(path, mtime)
+                # Re-probe LLM availability at most once a minute so an
+                # Ollama started after boot gets picked up (was boot-frozen).
+                now = time.time()
+                if now - llm_checked_at >= 60:
+                    self._llm_ok = self._llm.is_available()
+                    llm_checked_at = now
+                # Structural pass always runs; LLM extraction only if up.
+                self._pipeline.process_file(path, mtime, use_llm=self._llm_ok)
                 self._wf.dispatch_file_event(path, event)
             except Exception as e:  # noqa: BLE001 keep the worker alive
                 print(f"[agent] worker error on {path}: {e}")
@@ -129,19 +157,21 @@ class AgentLoop:
                 try:
                     self._wf.dispatch_deadline_check()
                     self._mem.evict_old_facts(self._cfg.memory.fact_ttl_days)
+                    # Reconcile the file index with disk so deleted files
+                    # don't linger as phantom "processed" entries.
+                    for path in self._mem.indexed_paths():
+                        if not os.path.exists(path):
+                            self._mem.remove_indexed_path(path)
                 except Exception as e:  # noqa: BLE001
                     print(f"[agent] tick error: {e}")
                 last_deadline = now
 
-    # ── notifications ─────────────────────────────────────────────────────────
+    # ── notifications (persisted in memory — survive restarts) ──────────────
     def _on_notify(self, payload: Dict) -> None:
-        with self._notif_lock:
-            self._notifications.insert(0, payload)
-            del self._notifications[50:]
+        self._mem.add_notification(payload)
 
     def notifications(self) -> List[Dict]:
-        with self._notif_lock:
-            return list(self._notifications)
+        return self._mem.list_notifications()
 
     # ── read API (used by IPC) ────────────────────────────────────────────────
     @property
@@ -157,6 +187,29 @@ class AgentLoop:
     def run_workflow(self, workflow_id: str, case_id: str = "") -> WorkflowResult:
         ctx = {"case_id": case_id} if case_id else {}
         return self._wf.run(workflow_id, ctx)
+
+    def list_workflows(self) -> List[Dict]:
+        return self._wf.list_workflows()
+
+    def register_workflow(self, wf: Dict) -> List[str]:
+        """Validate + add + persist an officer-approved definition."""
+        return self._wf.register(wf, self.GENERATED_WORKFLOWS_PATH)
+
+    def author_workflow(self, request: str, register: bool = False) -> Dict:
+        """NL request -> validated workflow definition (see workflow_author).
+
+        With register=True a valid definition is added to the engine and
+        persisted to the generated-workflows file.
+        """
+        from .workflow_author import author_workflow
+        wf, errors = author_workflow(self._llm, request,
+                                     existing_ids=set(self._wf.known_ids()))
+        registered = False
+        if wf is not None and not errors and register:
+            errors = self._wf.register(wf, self.GENERATED_WORKFLOWS_PATH)
+            registered = not errors
+        return {"ok": wf is not None and not errors, "workflow": wf,
+                "errors": errors, "registered": registered}
 
     def status(self) -> Dict:
         return {

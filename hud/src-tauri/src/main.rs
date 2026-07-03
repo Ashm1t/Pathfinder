@@ -20,12 +20,73 @@ fn set_click_through(window: tauri::WebviewWindow, ignore: bool) -> Result<(), S
         .map_err(|e| e.to_string())
 }
 
+/// Case ids contain spaces ("FIR 214-26") — percent-encode path segments.
+fn enc(segment: &str) -> String {
+    segment.replace('%', "%25").replace(' ', "%20").replace('#', "%23")
+}
+
 #[tauri::command]
 async fn fetch_chronology(case_id: String) -> Result<Value, String> {
-    let url = format!("{AGENT_BASE_URL}/panels/chronology/{case_id}");
+    let url = format!("{AGENT_BASE_URL}/panels/chronology/{}", enc(&case_id));
     reqwest::Client::new()
         .get(url)
         .timeout(Duration::from_secs(3))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .json::<Value>()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn fetch_workflows() -> Result<Value, String> {
+    reqwest::Client::new()
+        .get(format!("{AGENT_BASE_URL}/workflows"))
+        .timeout(Duration::from_secs(3))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .json::<Value>()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn run_workflow(workflow_id: String, case_id: String) -> Result<Value, String> {
+    // Workflows can run LLM steps — allow minutes, not seconds.
+    reqwest::Client::new()
+        .post(format!("{AGENT_BASE_URL}/workflow/{}/run", enc(&workflow_id)))
+        .query(&[("case_id", case_id)])
+        .timeout(Duration::from_secs(180))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .json::<Value>()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn author_workflow(request: String, register: bool) -> Result<Value, String> {
+    reqwest::Client::new()
+        .post(format!("{AGENT_BASE_URL}/workflow/author"))
+        .json(&serde_json::json!({ "request": request, "register": register }))
+        .timeout(Duration::from_secs(240))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .json::<Value>()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn register_workflow(workflow: Value) -> Result<Value, String> {
+    reqwest::Client::new()
+        .post(format!("{AGENT_BASE_URL}/workflow/register"))
+        .json(&serde_json::json!({ "workflow": workflow }))
+        .timeout(Duration::from_secs(10))
         .send()
         .await
         .map_err(|e| e.to_string())?
@@ -89,7 +150,10 @@ fn spawn_agent_poller(app: AppHandle) {
 
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![set_click_through, fetch_chronology])
+        .invoke_handler(tauri::generate_handler![
+            set_click_through, fetch_chronology, fetch_workflows,
+            run_workflow, author_workflow, register_workflow
+        ])
         .setup(|app| {
             spawn_agent_poller(app.handle().clone());
             Ok(())

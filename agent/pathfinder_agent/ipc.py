@@ -42,6 +42,56 @@ def create_app(loop: "AgentLoop"):
         return {"ok": res.ok, "error": res.error,
                 "log": res.log, "context": res.context}
 
+    @app.get("/cases/{case_id}/facts")
+    def case_facts(case_id: str):
+        """Every stored fact with confidence + source, for audit display."""
+        facts = loop.memory.get_all_facts(case_id)
+        return {"case_id": case_id, "facts": [{
+            "type": f.type.value, "key": f.key, "value": f.value,
+            "confidence": f.confidence, "source_file": f.source_file,
+            "source_page": f.source_page, "extracted_at": f.extracted_at,
+            "event_date_ms": f.event_date_ms,
+        } for f in facts]}
+
+    @app.get("/cases/{case_id}/history")
+    def case_history(case_id: str):
+        """Audit trail: archived old values of facts that changed."""
+        return {"case_id": case_id,
+                "history": loop.memory.get_fact_history(case_id)}
+
+    @app.get("/workflows")
+    def workflows():
+        """Full definitions, so the HUD can render real steps, not mock data."""
+        return {"workflows": loop.list_workflows()}
+
+    @app.post("/workflow/register")
+    def register_workflow(payload: dict):
+        """Register a previously-authored (and officer-reviewed) definition.
+
+        Body: {"workflow": {...}} — validated against the blueprint again
+        before it is accepted and persisted.
+        """
+        wf = payload.get("workflow")
+        if not isinstance(wf, dict):
+            return {"ok": False, "errors": ["'workflow' object is required"]}
+        errors = loop.register_workflow(wf)
+        return {"ok": not errors, "errors": errors}
+
+    @app.post("/workflow/author")
+    def author_workflow(payload: dict):
+        """Create a workflow from a natural-language request.
+
+        Body: {"request": "<what the officer wants>", "register": bool}
+        A valid result is only added to the engine when register is true —
+        the intended flow is: author, show the officer, then register.
+        """
+        request = str(payload.get("request", "")).strip()
+        if not request:
+            return {"ok": False, "workflow": None,
+                    "errors": ["'request' is required"], "registered": False}
+        return loop.author_workflow(request,
+                                    register=bool(payload.get("register", False)))
+
     return app
 
 

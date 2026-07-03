@@ -2,161 +2,134 @@
   {
     "id": "isp_letter",
     "name": "ISP Data Request Letter",
-    "description": "UC2: Generates a Section 91/94 BNSS notice to ISP from case data",
+    "description": "UC2: Drafts a Section 91 BNSS notice to an ISP for CDR/IPDR records from case data",
     "enabled": true,
-    "trigger": {
-      "type": "manual",
-      "config": {}
-    },
+    "trigger": { "type": "manual", "config": {} },
     "steps": [
-      {
-        "type": "read_document",
-        "name": "Read FIR",
-        "config": {}
-      },
-      {
-        "type": "extract_facts",
-        "name": "Extract accused phone numbers",
-        "config": {}
-      },
-      {
-        "type": "llm_transform",
-        "name": "Draft ISP letter",
+      { "type": "gather_case", "name": "Gather case", "config": {} },
+      { "type": "read_document", "name": "Read FIR copy",
+        "config": { "pattern": "FIR Copy*" } },
+      { "type": "extract_facts", "name": "Extract identifiers from FIR", "config": {} },
+      { "type": "llm_transform", "name": "Draft ISP letter body",
         "config": {
           "output_key": "isp_letter_text",
           "temperature": 0.2,
           "max_tokens": 1024,
-          "system_prompt": "You are a legal drafting assistant for Indian police. Draft a formal Section 91 BNSS notice to an ISP requesting CDR/IPDR records. Use formal Hindi/English mixed legal language as appropriate. Include all mandatory fields.",
-          "user_template": "Draft an ISP CDR request letter for case {{case_id}}. Accused numbers extracted from FIR. Generate the complete letter body."
-        }
-      },
-      {
-        "type": "generate_doc",
-        "name": "Apply letter template",
+          "system_prompt": "You are a legal drafting assistant for Indian police. Draft the body of a formal Section 91 BNSS notice to an ISP requesting CDR/IPDR and subscriber records. Formal legal English. Include all mandatory fields.",
+          "user_template": "Draft an ISP CDR request letter for case {{case_id}}. Accused persons: {{accused}}. Base it on this FIR:\n\n{{document_text}}"
+        } },
+      { "type": "generate_doc", "name": "Apply letter template",
         "config": {
           "output_key": "final_letter",
-          "template": "SECTION 91 BNSS NOTICE\n\nFrom: Investigating Officer\nCase: {{case_id}} | FIR No: {{FirNumber}}\nPolice Station: {{PoliceStation}}\n\n{{isp_letter_text}}\n\nDate: ___________\nSignature: ___________"
-        }
-      },
-      {
-        "type": "notify",
-        "name": "Notify completion",
+          "template": "NOTICE UNDER SECTION 91 BNSS\n\nFrom: {{IoName}}\nCase: {{case_id}} | FIR No: {{FirNumber}}\nPolice Station: {{PoliceStation}}\n\n{{isp_letter_text}}\n\nDate: ___________\nSignature: ___________"
+        } },
+      { "type": "write_file", "name": "Save draft",
+        "config": {
+          "content_key": "final_letter",
+          "output_path": "drafts/{{case_id}} - isp_letter.txt"
+        } },
+      { "type": "notify", "name": "Notify completion",
         "config": {
           "message": "ISP letter draft ready for review",
           "severity": "info"
-        }
-      }
+        } }
     ]
   },
   {
     "id": "chargesheet_check",
     "name": "Chargesheet Deadline Alert",
-    "description": "UC3: Alerts when chargesheet deadline approaches and checks document completeness",
+    "description": "UC3: When a chargesheet deadline approaches, checks document completeness and drafts a report",
     "enabled": true,
-    "trigger": {
-      "type": "deadline",
-      "config": { "days_before": 7 }
-    },
+    "trigger": { "type": "deadline",
+                 "config": { "days_before": 7, "type": "ChargesheetDeadline" } },
     "steps": [
-      {
-        "type": "llm_transform",
-        "name": "Check completeness",
+      { "type": "gather_case", "name": "Gather case", "config": {} },
+      { "type": "checklist", "name": "Scan completeness",
         "config": {
           "output_key": "completeness_report",
-          "temperature": 0.1,
-          "max_tokens": 512,
-          "system_prompt": "You are a police case review assistant. Check if all required components for a chargesheet are present and list what is missing.",
-          "user_template": "Case {{case_id}} chargesheet deadline is {{deadline_value}}. Review completeness and list missing documents."
-        }
-      },
-      {
-        "type": "notify",
-        "name": "Alert IO",
+          "items": [
+            { "label": "FIR copy on record", "pattern": "FIRST INFORMATION REPORT" },
+            { "label": "Sections applied stated", "pattern": "Sections applied:" },
+            { "label": "Investigating Officer named", "pattern": "Investigating Officer:" },
+            { "label": "At least one accused statement recorded", "pattern": "(Interrogation Note|Disclosure Statement)" },
+            { "label": "Seizure/recovery memo on record", "pattern": "(SEIZURE MEMO|RECOVERY MEMO)" },
+            { "label": "Witness statement(s) on record", "pattern": "WITNESS STATEMENT" },
+            { "label": "Chargesheet deadline stated", "pattern": "(chargesheet[\\s\\S]{0,60}filed by|Chargesheet Deadline)" }
+          ]
+        } },
+      { "type": "generate_doc", "name": "Build report",
         "config": {
-          "message": "Chargesheet deadline approaching — review completeness report",
+          "output_key": "final_report",
+          "template": "CHARGESHEET COMPLETENESS REPORT\n\nCase: {{case_id}} | FIR No: {{FirNumber}}\nPS: {{PoliceStation}} | IO: {{IoName}}\nDeadline: {{deadline_value}}\n\n{{completeness_report}}\n\nItems missing: {{checklist_missing}}\n\nDate: ___________\nIO Signature: ___________"
+        } },
+      { "type": "write_file", "name": "Save draft",
+        "config": {
+          "content_key": "final_report",
+          "output_path": "drafts/{{case_id}} - chargesheet_check.txt"
+        } },
+      { "type": "notify", "name": "Alert IO",
+        "config": {
+          "message": "Chargesheet deadline approaching for {{case_id}} — completeness report drafted ({{checklist_missing}} item(s) open)",
           "severity": "urgent"
-        }
-      }
+        } }
     ]
   },
   {
     "id": "notice_draft",
     "name": "Witness Notice Generator",
-    "description": "UC4: Drafts Section 179 BNSS notices to witnesses extracted from FIR",
+    "description": "UC4: Drafts one Section 179 BNSS notice per witness on record",
     "enabled": true,
-    "trigger": {
-      "type": "manual",
-      "config": {}
-    },
+    "trigger": { "type": "manual", "config": {} },
     "steps": [
-      {
-        "type": "read_document",
-        "name": "Read case diary",
-        "config": {}
-      },
-      {
-        "type": "extract_facts",
-        "name": "Extract witnesses",
-        "config": {}
-      },
-      {
-        "type": "llm_transform",
-        "name": "Draft notice",
+      { "type": "gather_case", "name": "Gather case", "config": {} },
+      { "type": "for_each", "name": "One notice per witness",
         "config": {
-          "output_key": "notice_text",
-          "temperature": 0.15,
-          "max_tokens": 512,
-          "system_prompt": "Draft a formal Section 179 BNSS notice to a witness for Indian police. Use legal language.",
-          "user_template": "Draft a witness notice for case {{case_id}}. Witnesses identified in FIR. Generate the notice body."
-        }
-      },
-      {
-        "type": "notify",
-        "name": "Notify ready",
+          "over": "witnesses",
+          "as": "witness",
+          "steps": [
+            { "type": "generate_doc", "name": "Draft notice",
+              "config": {
+                "output_key": "notice_doc",
+                "template": "NOTICE UNDER SECTION 179 BNSS\n(Notice to a witness to appear before a police officer)\n\nTo: {{witness}}\n\nCase: {{case_id}} | FIR No: {{FirNumber}}\nPolice Station: {{PoliceStation}}\n\nYou are hereby required under Section 179 of the Bharatiya Nagarik\nSuraksha Sanhita, 2023 to appear before the undersigned Investigating\nOfficer to render true and full account of what you know concerning the\nfacts and circumstances of the above case, in which you have been named\nas a witness. Failure to attend without lawful excuse is an offence\nunder law.\n\nInvestigating Officer: {{IoName}}\n\nDate: ___________\nSignature: ___________"
+              } },
+            { "type": "write_file", "name": "Save draft",
+              "config": {
+                "content_key": "notice_doc",
+                "output_path": "drafts/{{case_id}} - notice - {{witness}}.txt"
+              } }
+          ]
+        } },
+      { "type": "notify", "name": "Notify ready",
         "config": {
-          "message": "Witness notice draft ready",
+          "message": "{{witness_count}} witness notice draft(s) ready for review",
           "severity": "info"
-        }
-      }
+        } }
     ]
   },
   {
     "id": "court_compliance",
     "name": "Court Compliance Report",
-    "description": "UC5: Auto-generates a court compliance report from case chronology",
+    "description": "UC5: Before a court date, assembles a compliance report from the case chronology",
     "enabled": true,
-    "trigger": {
-      "type": "deadline",
-      "config": { "days_before": 3, "type": "CourtDate" }
-    },
+    "trigger": { "type": "deadline",
+                 "config": { "days_before": 3, "type": "CourtDate" } },
     "steps": [
-      {
-        "type": "llm_transform",
-        "name": "Draft compliance report",
-        "config": {
-          "output_key": "compliance_report",
-          "temperature": 0.15,
-          "max_tokens": 768,
-          "system_prompt": "You are drafting a court compliance report for an Indian police IO. Summarize steps taken in the investigation. Be factual, concise, and formal.",
-          "user_template": "Generate a court compliance report for case {{case_id}}. Court date: {{deadline_value}}. Summarize investigation progress."
-        }
-      },
-      {
-        "type": "generate_doc",
-        "name": "Apply report template",
+      { "type": "gather_case", "name": "Gather case", "config": {} },
+      { "type": "generate_doc", "name": "Assemble report",
         "config": {
           "output_key": "final_report",
-          "template": "COMPLIANCE REPORT\n\nIn the Court of ___________\nCase: {{case_id}} | FIR No: {{FirNumber}}\n\n{{compliance_report}}\n\nDate: ___________\nIO Signature: ___________"
-        }
-      },
-      {
-        "type": "notify",
-        "name": "Notify ready",
+          "template": "COMPLIANCE REPORT\n\nIn the Court of ___________\nCase: {{case_id}} | FIR No: {{FirNumber}}\nHearing date: {{deadline_value}}\n\nInvestigation progress to date:\n\n{{chronology_text}}\n\nDate: ___________\nIO Signature: ___________"
+        } },
+      { "type": "write_file", "name": "Save draft",
         "config": {
-          "message": "Court compliance report ready for review",
+          "content_key": "final_report",
+          "output_path": "drafts/{{case_id}} - court_compliance.txt"
+        } },
+      { "type": "notify", "name": "Notify ready",
+        "config": {
+          "message": "Court compliance report drafted for {{case_id}} (hearing {{deadline_value}})",
           "severity": "warning"
-        }
-      }
+        } }
     ]
   }
 ]

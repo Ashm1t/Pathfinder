@@ -9,7 +9,9 @@
     "timeout_s": 60
   },
   "agent": {
-    "watched_folders": [],
+    "watched_folders": [
+      "sample_data"
+    ],
     "poll_interval_s": 5.0,
     "max_file_size_mb": 50,
     "supported_extensions": [".txt", ".md", ".docx", ".pdf"]

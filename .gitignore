@@ -48,6 +48,9 @@ __pycache__/
 .venv/
 venv/
 agent/_sample/
+agent/drafts/
+agent/sample_data/_generated/
+agent/config/workflows.generated.json
 *.db
 *.db-wal
 *.db-shm

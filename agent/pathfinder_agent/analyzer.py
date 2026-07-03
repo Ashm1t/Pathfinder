@@ -82,8 +82,57 @@ def analyze_case_folder(folder_path: str) -> List[CaseFact]:
             if ev_ms is not None:
                 facts.append(CaseFact(
                     case_id=case_id, type=FactType.KEY_EVENT,
+                    key=entry,  # one chronology row PER document, not one per case
                     value=f"Document on record: {entry}",
                     source_file=path, event_date_ms=ev_ms, confidence=0.6))
+    return facts
+
+
+# ── Header-fact extraction (zero-LLM content pass) ──────────────────────────
+# Indian case-file documents carry strongly conventioned header lines
+# ("Police Station:", "Witness:", "Investigating Officer:"). Where the
+# convention holds, extract deterministically — same lesson as the ip_letter
+# reference tool: never spend an LLM call on what a template/regex gives you
+# for free. The LLM pass still handles everything narrative.
+_HEADER_PATTERNS = [
+    # (FactType, regex with one capture group, keyed_by_value)
+    (FactType.POLICE_STATION, re.compile(r"^Police Station:\s*(.+?)\s*$", re.M), False),
+    (FactType.DISTRICT, re.compile(r"^District:\s*(.+?)\s*$", re.M), False),
+    (FactType.IO_NAME, re.compile(r"Investigating Officer:\s*([^,\n.]+)"), False),
+    (FactType.VICTIM_NAME, re.compile(r"Complainant / Victim:\s*([^,\n]+),"), False),
+    (FactType.WITNESS_NAME, re.compile(r"^Witness:\s*([^,\n]+),", re.M), True),
+    (FactType.ACCUSED_NAME, re.compile(r"^Accused:\s*([^,\n]+),", re.M), True),
+    (FactType.IPC_SECTION, re.compile(r"Sections applied:\s*([\s\S]+?)\n\n"), False),
+    (FactType.CASE_STATUS, re.compile(r"^Case Status:\s*(.+?)\s*$", re.M | re.I), False),
+    (FactType.CHARGESHEET_DEADLINE,
+     re.compile(r"must be filed by\s*(\d{1,2}\.\d{1,2}\.\d{2,4})"), False),
+    (FactType.COURT_DATE,
+     re.compile(r"listed for(?: the)? next hearing on\s*(\d{1,2}\.\d{1,2}\.\d{2,4})"),
+     False),
+]
+_DATED_FACTS = {FactType.CHARGESHEET_DEADLINE, FactType.COURT_DATE}
+
+
+def extract_header_facts(case_id: str, path: str, text: str) -> List[CaseFact]:
+    """Deterministic facts from conventioned header lines. No LLM."""
+    facts: List[CaseFact] = []
+    for ftype, pattern, keyed in _HEADER_PATTERNS:
+        for m in pattern.finditer(text):
+            value = " ".join(m.group(1).split())
+            if not value:
+                continue
+            ev_ms = 0
+            if ftype in _DATED_FACTS:
+                ev_ms = filename_date_to_ms(value) or 0
+                if not ev_ms:
+                    continue  # a dated fact without a parseable date is useless
+            facts.append(CaseFact(
+                case_id=case_id, type=ftype,
+                key=value if keyed else "",
+                value=value, source_file=path,
+                event_date_ms=ev_ms, confidence=0.8))
+            if not keyed:
+                break  # single-valued type: first match in the document wins
     return facts
 
 

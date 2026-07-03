@@ -11,10 +11,34 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import List, Optional, Tuple
 
 from .llm import LlmAdapter
 from .models import CaseFact, FactType, iso_date_to_ms, now_ms
+
+# Fact types whose event_date the model MUST fill; when it forgets, we fall
+# back to any parseable date inside the verbatim value.
+_DATED_TYPES = {FactType.CHARGESHEET_DEADLINE, FactType.COURT_DATE,
+                FactType.DATE_OF_INCIDENT, FactType.DATE_OF_FIR}
+
+
+def _flex_date_to_ms(s: str) -> int:
+    """ISO first; fall back to Indian DD.MM.YYYY / DD/MM/YY forms."""
+    ms = iso_date_to_ms(s)
+    if ms:
+        return ms
+    m = re.search(r"(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})", s or "")
+    if not m:
+        return 0
+    d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    if y < 100:
+        y += 2000
+    from datetime import datetime, timezone
+    try:
+        return int(datetime(y, mo, d, tzinfo=timezone.utc).timestamp() * 1000)
+    except ValueError:
+        return 0
 
 # Optional extractors — degrade gracefully if not installed.
 try:
@@ -89,14 +113,28 @@ class CaseExtractor:
     def extract(self, case_id: str, source_path: str, text: str) -> List[CaseFact]:
         out: List[CaseFact] = []
         for chunk in _chunk(text):
-            resp = self._llm.chat(
-                [{"role": "system", "content": _SYSTEM_PROMPT},
-                 {"role": "user", "content": "Extract facts:\n\n" + chunk}],
-                temperature=0.05, max_tokens=1024)
-            if not resp.ok:
-                continue
-            self._merge(out, self._parse(resp.content, case_id, source_path))
+            self._merge(out, self._extract_chunk(case_id, source_path, chunk))
         return out
+
+    def _extract_chunk(self, case_id: str, source_path: str,
+                       chunk: str) -> List[CaseFact]:
+        """One chunk -> facts, with a single self-repair retry when the
+        model's output doesn't parse as a JSON array."""
+        messages = [{"role": "system", "content": _SYSTEM_PROMPT},
+                    {"role": "user", "content": "Extract facts:\n\n" + chunk}]
+        for _attempt in range(2):
+            resp = self._llm.chat(messages, temperature=0.05, max_tokens=1024)
+            if not resp.ok:
+                return []
+            facts = self._parse(resp.content, case_id, source_path)
+            if facts:
+                return facts
+            messages = messages + [
+                {"role": "assistant", "content": resp.content},
+                {"role": "user", "content":
+                 "That was not a valid JSON array of facts. Return ONLY the "
+                 "JSON array, no prose, no code fences."}]
+        return []
 
     @staticmethod
     def _merge(into: List[CaseFact], more: List[CaseFact]) -> None:
@@ -109,13 +147,20 @@ class CaseExtractor:
 
     @staticmethod
     def _parse(raw: str, case_id: str, source_path: str) -> List[CaseFact]:
+        # Small local models love code fences and trailing commas — tolerate
+        # both before giving up.
+        raw = raw.replace("```json", "").replace("```", "")
         start, end = raw.find("["), raw.rfind("]")
         if start == -1 or end == -1 or end < start:
             return []
+        snippet = raw[start:end + 1]
         try:
-            arr = json.loads(raw[start:end + 1])
+            arr = json.loads(snippet)
         except json.JSONDecodeError:
-            return []
+            try:
+                arr = json.loads(re.sub(r",\s*([\]}])", r"\1", snippet))
+            except json.JSONDecodeError:
+                return []
         facts = []
         for item in arr:
             if not isinstance(item, dict):
@@ -123,15 +168,24 @@ class CaseExtractor:
             value = str(item.get("value", "")).strip()
             if not value:
                 continue
+            ftype = FactType.from_str(item.get("fact_type", "KeyEvent"))
+            event_ms = _flex_date_to_ms(str(item.get("event_date", "")))
+            if not event_ms and ftype in _DATED_TYPES:
+                event_ms = _flex_date_to_ms(value)
+            try:
+                confidence = float(item.get("confidence", 1.0) or 1.0)
+                source_page = int(item.get("source_page", 0) or 0)
+            except (TypeError, ValueError):
+                confidence, source_page = 1.0, 0
             facts.append(CaseFact(
                 case_id=case_id,
-                type=FactType.from_str(item.get("fact_type", "KeyEvent")),
+                type=ftype,
                 key=str(item.get("key", "")),
                 value=value,
                 source_file=source_path,
-                source_page=int(item.get("source_page", 0) or 0),
-                confidence=float(item.get("confidence", 1.0) or 1.0),
+                source_page=source_page,
+                confidence=confidence,
                 extracted_at=now_ms(),
-                event_date_ms=iso_date_to_ms(str(item.get("event_date", ""))),
+                event_date_ms=event_ms,
             ))
         return facts

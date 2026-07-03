@@ -58,6 +58,29 @@ class FactType(str, Enum):
             return cls.KEY_EVENT
 
 
+# Fact types where a case legitimately has several values at once. For these,
+# an empty `key` must never be allowed to collapse distinct values into one
+# versioned row (the chronology bug, generalized) — memory.upsert_fact derives
+# a key from the value when a producer omits one.
+MULTI_VALUED_FACTS = frozenset({
+    FactType.ACCUSED_NAME, FactType.ACCUSED_ADDRESS, FactType.WITNESS_NAME,
+    FactType.VICTIM_NAME, FactType.IPC_SECTION, FactType.COURT_DATE,
+    FactType.NOTICE_ISSUED, FactType.NOTICE_RESPONSE,
+    FactType.SEIZED_PROPERTY, FactType.KEY_EVENT, FactType.WORKFLOW_STEP,
+})
+
+
+def normalize_case_status(value: str) -> str:
+    """Map a CaseStatus fact's verbatim text onto the cases.status enum
+    (active | chargesheeted | closed)."""
+    v = value.lower()
+    if any(w in v for w in ("closed", "disposed", "cancelled", "untraced")):
+        return "closed"
+    if "chargesheet filed" in v or "chargesheeted" in v:
+        return "chargesheeted"
+    return "active"
+
+
 @dataclass
 class CaseFact:
     case_id: str

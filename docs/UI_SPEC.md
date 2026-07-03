@@ -3,6 +3,35 @@
 
 ## 0. Stack Decision (supersedes the Win32/Direct2D plan below)
 
+### 0.1 Current interaction model (2026-07 redesign)
+
+The shipped UI (`hud/ui/`) organises the panel taxonomy below into **three
+layers**. Visual rules (owner's direction, firm): **monochrome only —
+black/white/grey**, **zero border-radius anywhere** (the orb is a circle,
+not a rounded rect), translucent smoked-glass surfaces. Layout density and
+component anatomy follow the KoalaUI police-dashboard reference; strict font
+set DM Sans + JetBrains Mono (+ Noto Sans Devanagari fallback). Severity is
+encoded with grey intensity + pulse, never hue:
+
+1. **Always-on dock** (bottom-right): mini tabs **wrapped around the orb**
+   in an asymmetric mosaic — Highlights bar, Schedule, Current Case,
+   Work Tracker strip, tall What's Next column — hugging a large circular
+   orb (alert count / agent status). The two tabs nearest the orb get
+   concave radial mask cutouts so their edges wrap the orb circle ("tabs
+   strut out of the orb" — owner's direction).
+2. **Expanded**: clicking a mini tab opens the big version of *that* tab as
+   a single tall panel beside the dock (same tab / × / Escape closes it).
+   Clicking a case inside Current Case jumps the panel to its Chronology.
+3. **Dashboard application window** — opened **only by clicking the orb**:
+   sidebar app with Overview, Case Diaries (study chronology/documents),
+   Workflows (execute, draft-only), Schedule (month calendar + day agenda),
+   and Security (CCTV camera wall per the approved KoalaUI Security
+   reference; feeds simulated until real camera sources exist).
+
+Agent data still flows exactly as §7 describes (`/panels` → Tauri events);
+Schedule, Work Tracker and workflow metadata are frontend sample data until
+the agent grows endpoints for them.
+
 **The HUD is built with Tauri**, not raw Win32 + Direct2D: a thin Rust shell
 window (transparent, click-through, always-on-top, DPI-aware — all first-class
 Tauri window APIs) hosting the actual panels/widgets as HTML/CSS/JS rendered

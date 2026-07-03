@@ -10,7 +10,9 @@ import sqlite3
 import threading
 from typing import List, Optional
 
-from .models import CaseFact, CaseRecord, FactType, now_ms
+from typing import Dict
+
+from .models import CaseFact, CaseRecord, FactType, MULTI_VALUED_FACTS, now_ms
 
 SCHEMA = """
 PRAGMA journal_mode = WAL;
@@ -57,6 +59,14 @@ CREATE TABLE IF NOT EXISTS file_index (
 CREATE TABLE IF NOT EXISTS watched_folders (
     path    TEXT PRIMARY KEY,
     enabled INTEGER DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS notifications (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    message    TEXT NOT NULL,
+    severity   TEXT DEFAULT 'info',
+    case_id    TEXT DEFAULT '',
+    created_at INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_facts_case  ON facts(case_id);
@@ -144,6 +154,12 @@ class AgentMemory:
 
     # ── Facts (with versioning) ──────────────────────────────────────────────
     def upsert_fact(self, fact: CaseFact) -> None:
+        # Identity boundary: (case_id, fact_type, key) is a fact's identity.
+        # For multi-valued types an empty key (LLM producers often omit it)
+        # would collapse distinct values into one versioned row — derive the
+        # key from the value instead so values accumulate.
+        if fact.type in MULTI_VALUED_FACTS and not fact.key:
+            fact.key = fact.value[:120]
         with self._lock:
             existing = self._db.execute(
                 "SELECT id, value FROM facts WHERE case_id=? AND fact_type=? AND key=?",
@@ -206,6 +222,40 @@ class AgentMemory:
                 (now, limit)).fetchall()
         return [_row_to_fact(r) for r in rows]
 
+    def get_fact_history(self, case_id: str) -> List[Dict]:
+        """Audit trail: every archived old value for the case's facts,
+        newest change first."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT f.fact_type, f.key, f.value AS new_value, "
+                "h.old_value, h.changed_at "
+                "FROM fact_history h JOIN facts f ON f.id = h.fact_id "
+                "WHERE f.case_id=? ORDER BY h.changed_at DESC",
+                (case_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+    # ── Notifications (persistent — survive restarts) ────────────────────────
+    def add_notification(self, payload: Dict) -> None:
+        with self._lock:
+            self._db.execute(
+                "INSERT INTO notifications(message,severity,case_id,created_at) "
+                "VALUES(?,?,?,?)",
+                (payload.get("message", ""), payload.get("severity", "info"),
+                 payload.get("case_id", ""), now_ms()))
+            # Keep the table bounded.
+            self._db.execute(
+                "DELETE FROM notifications WHERE id NOT IN "
+                "(SELECT id FROM notifications ORDER BY id DESC LIMIT 200)")
+            self._db.commit()
+
+    def list_notifications(self, limit: int = 50) -> List[Dict]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT message, severity, case_id, created_at "
+                "FROM notifications ORDER BY id DESC LIMIT ?",
+                (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
     # ── File index ───────────────────────────────────────────────────────────
     def needs_processing(self, path: str, mtime_ms: int) -> bool:
         with self._lock:
@@ -222,6 +272,16 @@ class AgentMemory:
                 "last_mtime_ms=excluded.last_mtime_ms,"
                 "last_processed=excluded.last_processed,case_id=excluded.case_id",
                 (path, mtime_ms, now_ms(), case_id))
+            self._db.commit()
+
+    def indexed_paths(self) -> List[str]:
+        with self._lock:
+            rows = self._db.execute("SELECT path FROM file_index").fetchall()
+        return [r["path"] for r in rows]
+
+    def remove_indexed_path(self, path: str) -> None:
+        with self._lock:
+            self._db.execute("DELETE FROM file_index WHERE path=?", (path,))
             self._db.commit()
 
     # ── Maintenance ──────────────────────────────────────────────────────────

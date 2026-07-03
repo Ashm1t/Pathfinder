@@ -116,10 +116,19 @@ Legend: **Test** = how to exercise it · **Expect** = pass criteria · **If it b
   servers use Content-Length headers, our client assumes newline-delimited JSON.
 
 ### P3.2 — Workflow with real LLM (UC2 ISP letter)
-- **Test:** `POST /workflow/isp_letter/run?case_id=<id>` with model up.
-- **Expect:** `ok:true`, a draft in `context`, notification recorded.
-- **If it breaks:** `read_document` needs a `path` (manual trigger has none) — pass
-  one in config or seed `trigger_path`.
+- **Status: VALIDATED LIVE** (2026-07-03, qwen2.5:3b pulled): `isp_letter`
+  ran end-to-end — all 7 steps, real Section 91 BNSS draft written to
+  `drafts/`, notification recorded. Also validated live: LLM fact extraction
+  (9 typed facts from the FIR copy, incl. 4 distinct SeizedProperty items
+  accumulating correctly) and LLM workflow AUTHORING (a
+  property-release-intimation workflow authored from natural language,
+  validated, auto-repaired, registered, and executed to a correct draft).
+  P1.1/P1.2 hardening shipped alongside: fence/trailing-comma-tolerant JSON
+  parse with one retry per chunk, DD.MM.YYYY date fallback. Known honest
+  caveat: 3B authoring convergence is intermittent (each failure is safely
+  rejected by the validator; a 7B model would converge more reliably), and
+  drafting prose has small-model slips (e.g. "W/o" read as "widow") — the
+  officer-review premise covers this.
 
 ### P3.3 — Deadline-triggered workflows fire
 - **Test:** a case with a court date within 14 days; wait for the 30-min tick (or call

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Pathfinder HUD preview</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400..700&family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+Devanagari:wght@400;500;600&display=swap"
+    rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+  <style>body { background: #2a3138; }</style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module">
+    import "./main.js";
+    setTimeout(() => {
+      const s = window.__pf.state;
+      const h = (location.hash || "#wf").slice(1);
+      s.mode = "app";
+      s.appView = "workflows";
+      s.selectedCaseId = "FIR 201-25";
+      if (h === "wf-author") {
+        s.authorText = "Draft a bank account freeze request letter for each seized account";
+        s.authorState = { ok: true, registered: false, errors: [], workflow: {
+          id: "bank_freeze_letter", name: "Bank Freeze Request Letter",
+          description: "Drafts a freeze request to each bank holding a seized account",
+          trigger: { type: "manual", config: {} },
+          steps: [{ name: "Gather case" }, { name: "One letter per account" },
+                  { name: "Save draft" }, { name: "Tell the officer" }] } };
+      }
+      if (h === "wf-run") {
+        s.wfRuns.notice_draft = { running: false, done: true, ok: true,
+          message: "2 witness notice draft(s) ready for review" };
+        s.wfRuns.isp_letter = { running: true, done: false };
+        s.toasts = [{ id: 1, message: "Chargesheet deadline approaching for FIR 214-26",
+                      severity: "urgent", case_id: "FIR 214-26" },
+                    { id: 2, message: "Court compliance report drafted", severity: "warning",
+                      case_id: "FIR 214-26" }];
+      }
+      window.__pf.render();
+    }, 400);
+  </script>
+</body>
+</html>
