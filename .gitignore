@@ -58,3 +58,7 @@ agent/config/workflows.generated.json
 # Rust / Tauri
 hud/src-tauri/target/
 hud/src-tauri/gen/
+
+# Local-only: real case material and reference clones — never commit
+FIR 538-24/
+ip_letter/
