@@ -36,6 +36,11 @@ def create_app(loop: "AgentLoop"):
     def notifications():
         return {"notifications": loop.notifications()}
 
+    @app.get("/schedule")
+    def schedule():
+        """Real calendar events derived from dated facts in memory."""
+        return {"events": loop.get_schedule()}
+
     @app.post("/workflow/{workflow_id}/run")
     def run_workflow(workflow_id: str, case_id: str = ""):
         res = loop.run_workflow(workflow_id, case_id)

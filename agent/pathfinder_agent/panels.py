@@ -89,6 +89,37 @@ def whats_next(mem: AgentMemory) -> List[Dict]:
     return items
 
 
+def schedule(mem: AgentMemory, past_days: int = 45,
+             future_days: int = 60) -> List[Dict]:
+    """Real calendar events from memory: dated facts become agenda entries.
+    Deadlines/court dates surface as their kind; everything else (dated
+    documents, incident dates) as ambient 'task' entries."""
+    from datetime import datetime, timezone
+    now = now_ms()
+    out = []
+    for f in mem.get_dated_facts(now - past_days * 86400_000,
+                                 now + future_days * 86400_000):
+        d = datetime.fromtimestamp(f.event_date_ms / 1000, tz=timezone.utc)
+        if f.type == FactType.COURT_DATE:
+            kind, title = "court", f"Hearing · {f.case_id}"
+        elif f.type == FactType.CHARGESHEET_DEADLINE:
+            kind, title = "deadline", f"Chargesheet due · {f.case_id}"
+        elif f.type == FactType.KEY_EVENT:
+            kind, title = "task", f.value
+        else:
+            continue  # other dated facts (DateOfFIR etc.) aren't agenda items
+        out.append({
+            "date": d.strftime("%Y-%m-%d"),
+            "time": "",              # facts carry dates, not times (yet)
+            "title": title,
+            "where": f.case_id,
+            "kind": kind,
+            "case_id": f.case_id,
+            "source_file": f.source_file,
+        })
+    return out
+
+
 def all_panels(mem: AgentMemory) -> Dict:
     return {
         "recent_cases": recent_cases(mem),

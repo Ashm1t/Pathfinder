@@ -26,6 +26,7 @@ from typing import Callable, Dict, List, Optional
 
 from .extraction import CaseExtractor, extract_text
 from .llm import LlmAdapter
+from .mcp_client import McpClient
 from .memory import AgentMemory
 from .models import FactType, now_ms
 from .workflow_schema import validate_workflow
@@ -62,13 +63,37 @@ def _ms_to_date(ms: int) -> str:
 class WorkflowEngine:
     def __init__(self, llm: LlmAdapter, memory: AgentMemory,
                  notify_cb: Optional[Callable[[Dict], None]] = None,
-                 case_files_resolver: Optional[Callable[[str], List[str]]] = None):
+                 case_files_resolver: Optional[Callable[[str], List[str]]] = None,
+                 mcp_servers: Optional[Dict[str, Dict]] = None):
         self._llm = llm
         self._mem = memory
         self._notify = notify_cb
         self._resolve_case_files = case_files_resolver or (lambda case_id: [])
+        self._mcp_servers = mcp_servers or {}
+        self._mcp_clients: Dict[str, McpClient] = {}
         self._workflows: List[Dict] = []
         self._lock = threading.Lock()
+
+    def shutdown(self) -> None:
+        for client in self._mcp_clients.values():
+            client.close()
+        self._mcp_clients.clear()
+
+    def _get_mcp(self, server: str) -> Optional[McpClient]:
+        """Lazily spawn + handshake a configured MCP server, cached."""
+        if server in self._mcp_clients:
+            return self._mcp_clients[server]
+        spec = self._mcp_servers.get(server)
+        if not spec or not spec.get("command"):
+            return None
+        client = McpClient(spec["command"], list(spec.get("args", [])))
+        try:
+            if not client.connect():
+                return None
+        except OSError:
+            return None
+        self._mcp_clients[server] = client
+        return client
 
     # ── loading / registration ────────────────────────────────────────────────
     def load_from_file(self, path: str) -> None:
@@ -170,11 +195,19 @@ class WorkflowEngine:
                     continue
                 if d.event_date_ms - now > days * 86400 * 1000:
                     continue
-                self._execute(w, {
+                # Fire once per (workflow, deadline) — not on every tick.
+                wf_id = w.get("id", "")
+                if self._mem.was_deadline_dispatched(
+                        wf_id, d.case_id, d.type.value, d.event_date_ms):
+                    continue
+                res = self._execute(w, {
                     "case_id": d.case_id,
                     "deadline_type": d.type.value,
                     "deadline_value": d.value,
                 })
+                if res.ok:
+                    self._mem.mark_deadline_dispatched(
+                        wf_id, d.case_id, d.type.value, d.event_date_ms)
 
     # ── execution ─────────────────────────────────────────────────────────────
     def _execute(self, wf: Dict, ctx: Dict) -> WorkflowResult:
@@ -364,6 +397,28 @@ class WorkflowEngine:
             return True
         except OSError:
             return False
+
+    def _step_mcp_call(self, cfg: Dict, ctx: Dict) -> bool:
+        """Call a tool on a configured MCP server — the action side.
+        String argument values get {{ctx}} substitution."""
+        client = self._get_mcp(cfg.get("server", ""))
+        if client is None:
+            return False
+        arguments = {}
+        for k, v in (cfg.get("arguments") or {}).items():
+            arguments[k] = _substitute(v, ctx) if isinstance(v, str) else v
+        res = client.call_tool(cfg.get("tool", ""), arguments)
+        if not res.get("ok"):
+            return False
+        result = res.get("result", {})
+        # MCP tool results carry content blocks; surface the text plainly.
+        blocks = result.get("content", [])
+        text = "\n".join(b.get("text", "") for b in blocks
+                         if isinstance(b, dict) and b.get("type") == "text")
+        if result.get("isError"):
+            return False
+        ctx[cfg.get("output_key") or "mcp_result"] = text or json.dumps(result)
+        return True
 
     def _step_notify(self, cfg: Dict, ctx: Dict) -> bool:
         payload = {

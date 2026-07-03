@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field, asdict
-from typing import List
+from typing import Dict, List
 
 
 @dataclass
@@ -29,6 +29,9 @@ class AgentConfig:
     supported_extensions: List[str] = field(
         default_factory=lambda: [".txt", ".md", ".docx", ".pdf"]
     )
+    # MCP servers workflows may call via the mcp_call step:
+    #   { "<name>": {"command": "npx", "args": ["-y", "<package>", ...]} }
+    mcp_servers: Dict[str, Dict] = field(default_factory=dict)
 
 
 @dataclass

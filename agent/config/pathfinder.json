@@ -14,7 +14,13 @@
     ],
     "poll_interval_s": 5.0,
     "max_file_size_mb": 50,
-    "supported_extensions": [".txt", ".md", ".docx", ".pdf"]
+    "supported_extensions": [".txt", ".md", ".docx", ".pdf"],
+    "mcp_servers": {
+      "fs": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "drafts"]
+      }
+    }
   },
   "memory": {
     "db_path": "pathfinder_memory.db",

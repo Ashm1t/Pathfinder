@@ -136,6 +136,17 @@ async fn poll_agent_once(app: &AppHandle, client: &reqwest::Client) {
             let _ = app.emit("health-update", body);
         }
     }
+
+    if let Ok(resp) = client
+        .get(format!("{AGENT_BASE_URL}/schedule"))
+        .timeout(Duration::from_secs(2))
+        .send()
+        .await
+    {
+        if let Ok(body) = resp.json::<Value>().await {
+            let _ = app.emit("schedule-update", body);
+        }
+    }
 }
 
 fn spawn_agent_poller(app: AppHandle) {

@@ -33,6 +33,7 @@ const state = {
   calCursor: null,           // { y, m } shown month; null = current
   selDay: null,              // 'YYYY-MM-DD' selected calendar day
   workflowDefs: [],          // real definitions from GET /workflows
+  scheduleReal: null,        // real events from GET /schedule (null = use samples)
   wfRuns: {},                // workflow id -> run state (real or simulated)
   notifications: [],         // agent notifications (persisted server-side)
   lastNotifSeen: null,       // newest created_at already toasted
@@ -178,9 +179,16 @@ function dateKey(d) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-// Materialised schedule events: SAMPLE_EVENTS pinned to real dates plus
-// What's-Next due dates surfaced as deadline chips.
+// Schedule events. Inside Tauri, the agent's /schedule endpoint is the
+// source of truth (real dated facts from case memory). The sample events
+// only back the plain-browser preview.
 function allEvents() {
+  if (state.scheduleReal !== null) {
+    return state.scheduleReal
+      .map((e) => ({ key: e.date, time: e.time || "", title: e.title,
+                     where: e.where || e.case_id || "", kind: e.kind || "task" }))
+      .sort((a, b) => (a.key + a.time).localeCompare(b.key + b.time));
+  }
   const out = SAMPLE_EVENTS.map((e) => {
     const d = new Date();
     d.setDate(d.getDate() + e.d);
@@ -273,7 +281,8 @@ function renderDock() {
   const urgent = panels.major_updates.filter((u) => u.severity === "urgent").length;
   const hlTop = panels.major_updates[0];
   const nowHM = `${pad(new Date().getHours())}:${pad(new Date().getMinutes())}`;
-  const nextEvt = todayEvents().filter((e) => e.time >= nowHM)[0];
+  // time-less events are all-day: always still "upcoming" today
+  const nextEvt = todayEvents().filter((e) => !e.time || e.time >= nowHM)[0];
   const trackerDone = SAMPLE_TRACKER.reduce((s, t) => s + t.done, 0);
   const trackerTotal = SAMPLE_TRACKER.reduce((s, t) => s + t.total, 0);
   const segs = 14;
@@ -432,7 +441,7 @@ function renderScheduleBody(days = 7) {
     rows.push(`<div class="microlabel" style="padding:12px 2px 2px">${label}</div>`);
     rows.push(evts.map((e) => `
       <div class="sch-row">
-        <div class="sch-time">${e.time}</div>
+        <div class="sch-time">${e.time || "all-day"}</div>
         <div class="sch-main">
           <div class="sch-title">${esc(e.title)}</div>
           <div class="sch-where">${esc(e.where)}</div>
@@ -825,7 +834,7 @@ function renderScheduleView() {
     cells.push(`
       <button class="cal-day ${cls}" data-action="cal-day" data-day="${key}">
         <span class="cal-num">${d.getDate()}</span>
-        ${evts.slice(0, 2).map((e) => `<span class="cal-evt ${e.kind}">${e.time} ${esc(e.title)}</span>`).join("")}
+        ${evts.slice(0, 2).map((e) => `<span class="cal-evt ${e.kind}">${e.time ? e.time + " " : ""}${esc(e.title)}</span>`).join("")}
         ${evts.length > 2 ? `<span class="cal-evt more">+${evts.length - 2} more</span>` : ""}
       </button>`);
   }
@@ -835,7 +844,7 @@ function renderScheduleView() {
   const agenda = selEvts.length
     ? selEvts.map((e) => `
         <div class="sch-row">
-          <div class="sch-time">${e.time}</div>
+          <div class="sch-time">${e.time || "all-day"}</div>
           <div class="sch-main">
             <div class="sch-title">${esc(e.title)}</div>
             <div class="sch-where">${esc(e.where)}</div>
@@ -1177,6 +1186,10 @@ async function main() {
   await listen("health-update", (e) => { state.health = e.payload; render(); });
   await listen("notifications-update", (e) => {
     handleNotifications((e.payload && e.payload.notifications) || []);
+  });
+  await listen("schedule-update", (e) => {
+    state.scheduleReal = (e.payload && e.payload.events) || [];
+    render();
   });
   try {
     const res = await tauriInvoke("fetch_workflows");

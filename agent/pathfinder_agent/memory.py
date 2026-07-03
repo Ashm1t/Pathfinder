@@ -61,6 +61,15 @@ CREATE TABLE IF NOT EXISTS watched_folders (
     enabled INTEGER DEFAULT 1
 );
 
+CREATE TABLE IF NOT EXISTS dispatched_deadlines (
+    workflow_id   TEXT NOT NULL,
+    case_id       TEXT NOT NULL,
+    fact_type     TEXT NOT NULL,
+    event_date_ms INTEGER NOT NULL,
+    dispatched_at INTEGER,
+    PRIMARY KEY (workflow_id, case_id, fact_type, event_date_ms)
+);
+
 CREATE TABLE IF NOT EXISTS notifications (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     message    TEXT NOT NULL,
@@ -211,6 +220,16 @@ class AgentMemory:
                 (case_id,)).fetchall()
         return [_row_to_fact(r) for r in rows]
 
+    def get_dated_facts(self, start_ms: int, end_ms: int) -> List[CaseFact]:
+        """Every fact with a real-world date in [start, end] — feeds the
+        schedule/calendar."""
+        with self._lock:
+            rows = self._db.execute(
+                f"SELECT {_FACT_COLS} FROM facts "
+                "WHERE event_date_ms BETWEEN ? AND ? ORDER BY event_date_ms ASC",
+                (start_ms, end_ms)).fetchall()
+        return [_row_to_fact(r) for r in rows]
+
     def get_upcoming_deadlines(self, within_days: int = 14) -> List[CaseFact]:
         now = now_ms()
         limit = now + within_days * 86400 * 1000
@@ -233,6 +252,26 @@ class AgentMemory:
                 "WHERE f.case_id=? ORDER BY h.changed_at DESC",
                 (case_id,)).fetchall()
         return [dict(r) for r in rows]
+
+    # ── Deadline-dispatch dedupe ─────────────────────────────────────────────
+    def was_deadline_dispatched(self, workflow_id: str, case_id: str,
+                                fact_type: str, event_date_ms: int) -> bool:
+        with self._lock:
+            r = self._db.execute(
+                "SELECT 1 FROM dispatched_deadlines WHERE workflow_id=? AND "
+                "case_id=? AND fact_type=? AND event_date_ms=?",
+                (workflow_id, case_id, fact_type, event_date_ms)).fetchone()
+        return r is not None
+
+    def mark_deadline_dispatched(self, workflow_id: str, case_id: str,
+                                 fact_type: str, event_date_ms: int) -> None:
+        with self._lock:
+            self._db.execute(
+                "INSERT OR IGNORE INTO dispatched_deadlines"
+                "(workflow_id,case_id,fact_type,event_date_ms,dispatched_at) "
+                "VALUES(?,?,?,?,?)",
+                (workflow_id, case_id, fact_type, event_date_ms, now_ms()))
+            self._db.commit()
 
     # ── Notifications (persistent — survive restarts) ────────────────────────
     def add_notification(self, payload: Dict) -> None:

@@ -97,6 +97,13 @@ def main() -> int:
     check("whats_next panel now populated offline",
           len(panels["whats_next"]) >= 1, f"got {len(panels['whats_next'])}")
 
+    from pathfinder_agent.panels import schedule as schedule_panel
+    sched = schedule_panel(mem)
+    kinds = {e["kind"] for e in sched}
+    check("schedule panel yields real calendar events",
+          len(sched) >= 10 and "court" in kinds and "deadline" in kinds,
+          f"{len(sched)} events, kinds={kinds}")
+
     print("4. Real engine runs of the LLM-free workflows")
 
     def resolver(case_id: str):

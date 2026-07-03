@@ -99,6 +99,16 @@ STEP_SPECS: Dict[str, Dict] = {
         "provides": set(),  # provides <as>_count; handled specially
         "required": ["over", "steps"], "optional": ["as"],
     },
+    "mcp_call": {
+        "doc": "Call a tool on a configured MCP server (the action side — "
+               "e.g. filesystem, Office document generation). String argument "
+               "values get {{ctx}} substitution. Only servers configured in "
+               "agent config are callable.",
+        "needs": set(),
+        "provides": set(),
+        "required": ["server", "tool"], "optional": ["arguments", "output_key"],
+        "output_key_default": "mcp_result",
+    },
     "generate_doc": {
         "doc": "Fill a text template. {{key}} placeholders resolve from the "
                "run context first, then from the case's stored fact types "

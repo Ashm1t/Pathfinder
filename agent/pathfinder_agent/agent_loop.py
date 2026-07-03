@@ -40,7 +40,8 @@ class AgentLoop:
         self._extractor = CaseExtractor(self._llm)
         self._pipeline = DocumentPipeline(self._mem, self._extractor, cfg.agent)
         self._wf = WorkflowEngine(self._llm, self._mem, self._on_notify,
-                                  case_files_resolver=self._case_files)
+                                  case_files_resolver=self._case_files,
+                                  mcp_servers=cfg.agent.mcp_servers)
 
         self._jobs: "queue.Queue[tuple]" = queue.Queue()
         self._running = False
@@ -93,6 +94,7 @@ class AgentLoop:
         self._jobs.put(None)  # unblock worker
         for t in self._threads:
             t.join(timeout=5)
+        self._wf.shutdown()
         self._mem.close()
 
     def _spawn(self, target) -> None:
@@ -183,6 +185,9 @@ class AgentLoop:
 
     def get_chronology(self, case_id: str) -> List[Dict]:
         return panels.chronology(self._mem, case_id)
+
+    def get_schedule(self) -> List[Dict]:
+        return panels.schedule(self._mem)
 
     def run_workflow(self, workflow_id: str, case_id: str = "") -> WorkflowResult:
         ctx = {"case_id": case_id} if case_id else {}
